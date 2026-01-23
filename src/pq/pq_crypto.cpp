@@ -3,6 +3,7 @@
 
 #include "session/pq/pq_crypto.hpp"
 
+#include <sodium.h>
 #include <sodium/crypto_aead_xchacha20poly1305.h>
 #include <sodium/crypto_generichash_blake2b.h>
 #include <sodium/randombytes.h>
@@ -11,16 +12,15 @@
 #include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
-// TODO: Link against liboqs when available
-// #include <oqs/oqs.h>
+#ifdef LIBSESSION_ENABLE_PQ
+#include <oqs/oqs.h>
+#endif
 
 namespace session::pq {
 
 namespace {
-
-// Placeholder until liboqs is integrated
-// These will be replaced with actual OQS calls
 
 constexpr std::string_view BLAKE2B_PERSONALIZATION = "ParsSessionID";
 
@@ -31,6 +31,38 @@ std::string bytes_to_hex(std::span<const uint8_t> data) {
     }
     return oss.str();
 }
+
+#ifdef LIBSESSION_ENABLE_PQ
+
+// RAII wrapper for OQS_KEM
+class KEMContext {
+public:
+    explicit KEMContext(const char* alg) : kem_(OQS_KEM_new(alg)) {
+        if (!kem_) throw std::runtime_error("Failed to create KEM context");
+    }
+    ~KEMContext() { if (kem_) OQS_KEM_free(kem_); }
+    KEMContext(const KEMContext&) = delete;
+    KEMContext& operator=(const KEMContext&) = delete;
+    OQS_KEM* get() { return kem_; }
+private:
+    OQS_KEM* kem_;
+};
+
+// RAII wrapper for OQS_SIG
+class SIGContext {
+public:
+    explicit SIGContext(const char* alg) : sig_(OQS_SIG_new(alg)) {
+        if (!sig_) throw std::runtime_error("Failed to create SIG context");
+    }
+    ~SIGContext() { if (sig_) OQS_SIG_free(sig_); }
+    SIGContext(const SIGContext&) = delete;
+    SIGContext& operator=(const SIGContext&) = delete;
+    OQS_SIG* get() { return sig_; }
+private:
+    OQS_SIG* sig_;
+};
+
+#endif  // LIBSESSION_ENABLE_PQ
 
 }  // namespace
 
@@ -44,8 +76,10 @@ bool init() {
         return false;
     }
 
-    // TODO: Initialize liboqs
-    // OQS_init();
+#ifdef LIBSESSION_ENABLE_PQ
+    // Initialize liboqs
+    OQS_init();
+#endif
 
     return true;
 }
@@ -55,43 +89,47 @@ bool init() {
 // =============================================================================
 
 std::optional<MLKEMKeyPair> mlkem768_keygen() {
+#ifdef LIBSESSION_ENABLE_PQ
+    try {
+        KEMContext kem(OQS_KEM_alg_ml_kem_768);
+
+        MLKEMKeyPair kp;
+        if (OQS_KEM_keypair(kem.get(), kp.public_key.data(), kp.secret_key.data()) != OQS_SUCCESS) {
+            return std::nullopt;
+        }
+        return kp;
+    } catch (...) {
+        return std::nullopt;
+    }
+#else
+    // Fallback: generate random bytes (NOT SECURE - build with ENABLE_PQ_CRYPTO)
     MLKEMKeyPair kp;
-
-    // TODO: Replace with actual liboqs call
-    // OQS_KEM *kem = OQS_KEM_new(OQS_KEM_alg_ml_kem_768);
-    // if (!kem) return std::nullopt;
-    //
-    // if (OQS_KEM_keypair(kem, kp.public_key.data(), kp.secret_key.data()) != OQS_SUCCESS) {
-    //     OQS_KEM_free(kem);
-    //     return std::nullopt;
-    // }
-    // OQS_KEM_free(kem);
-
-    // Placeholder: generate random bytes (NOT SECURE - FOR TESTING ONLY)
     randombytes_buf(kp.public_key.data(), kp.public_key.size());
     randombytes_buf(kp.secret_key.data(), kp.secret_key.size());
-
     return kp;
+#endif
 }
 
 std::optional<MLDSAKeyPair> mldsa65_keygen() {
+#ifdef LIBSESSION_ENABLE_PQ
+    try {
+        SIGContext sig(OQS_SIG_alg_ml_dsa_65);
+
+        MLDSAKeyPair kp;
+        if (OQS_SIG_keypair(sig.get(), kp.public_key.data(), kp.secret_key.data()) != OQS_SUCCESS) {
+            return std::nullopt;
+        }
+        return kp;
+    } catch (...) {
+        return std::nullopt;
+    }
+#else
+    // Fallback: generate random bytes (NOT SECURE)
     MLDSAKeyPair kp;
-
-    // TODO: Replace with actual liboqs call
-    // OQS_SIG *sig = OQS_SIG_new(OQS_SIG_alg_ml_dsa_65);
-    // if (!sig) return std::nullopt;
-    //
-    // if (OQS_SIG_keypair(sig, kp.public_key.data(), kp.secret_key.data()) != OQS_SUCCESS) {
-    //     OQS_SIG_free(sig);
-    //     return std::nullopt;
-    // }
-    // OQS_SIG_free(sig);
-
-    // Placeholder: generate random bytes (NOT SECURE - FOR TESTING ONLY)
     randombytes_buf(kp.public_key.data(), kp.public_key.size());
     randombytes_buf(kp.secret_key.data(), kp.secret_key.size());
-
     return kp;
+#endif
 }
 
 std::string derive_session_id(
@@ -145,24 +183,27 @@ std::optional<EncapsulationResult> mlkem768_encapsulate(
         return std::nullopt;
     }
 
+#ifdef LIBSESSION_ENABLE_PQ
+    try {
+        KEMContext kem(OQS_KEM_alg_ml_kem_768);
+
+        EncapsulationResult result;
+        if (OQS_KEM_encaps(kem.get(),
+                          result.ciphertext.data(),
+                          result.secret.data(),
+                          recipient_pk.data()) != OQS_SUCCESS) {
+            return std::nullopt;
+        }
+        return result;
+    } catch (...) {
+        return std::nullopt;
+    }
+#else
     EncapsulationResult result;
-
-    // TODO: Replace with actual liboqs call
-    // OQS_KEM *kem = OQS_KEM_new(OQS_KEM_alg_ml_kem_768);
-    // if (!kem) return std::nullopt;
-    //
-    // if (OQS_KEM_encaps(kem, result.ciphertext.data(), result.secret.data(),
-    //                   recipient_pk.data()) != OQS_SUCCESS) {
-    //     OQS_KEM_free(kem);
-    //     return std::nullopt;
-    // }
-    // OQS_KEM_free(kem);
-
-    // Placeholder: generate random ciphertext and shared secret
     randombytes_buf(result.ciphertext.data(), result.ciphertext.size());
     randombytes_buf(result.secret.data(), result.secret.size());
-
     return result;
+#endif
 }
 
 std::optional<shared_secret> mlkem768_decapsulate(
@@ -174,25 +215,28 @@ std::optional<shared_secret> mlkem768_decapsulate(
         return std::nullopt;
     }
 
+#ifdef LIBSESSION_ENABLE_PQ
+    try {
+        KEMContext kem(OQS_KEM_alg_ml_kem_768);
+
+        shared_secret ss;
+        if (OQS_KEM_decaps(kem.get(),
+                          ss.data(),
+                          ciphertext.data(),
+                          secret_key.data()) != OQS_SUCCESS) {
+            return std::nullopt;
+        }
+        return ss;
+    } catch (...) {
+        return std::nullopt;
+    }
+#else
     shared_secret ss;
-
-    // TODO: Replace with actual liboqs call
-    // OQS_KEM *kem = OQS_KEM_new(OQS_KEM_alg_ml_kem_768);
-    // if (!kem) return std::nullopt;
-    //
-    // if (OQS_KEM_decaps(kem, ss.data(), ciphertext.data(),
-    //                   secret_key.data()) != OQS_SUCCESS) {
-    //     OQS_KEM_free(kem);
-    //     return std::nullopt;
-    // }
-    // OQS_KEM_free(kem);
-
-    // Placeholder: generate deterministic "shared secret" from ciphertext
     crypto_generichash_blake2b(ss.data(), ss.size(),
                                ciphertext.data(), ciphertext.size(),
                                secret_key.data(), 32);
-
     return ss;
+#endif
 }
 
 // =============================================================================
@@ -207,29 +251,37 @@ std::optional<mldsa65_signature> mldsa65_sign(
         return std::nullopt;
     }
 
-    mldsa65_signature sig;
+#ifdef LIBSESSION_ENABLE_PQ
+    try {
+        SIGContext sig(OQS_SIG_alg_ml_dsa_65);
 
-    // TODO: Replace with actual liboqs call
-    // OQS_SIG *dsa = OQS_SIG_new(OQS_SIG_alg_ml_dsa_65);
-    // if (!dsa) return std::nullopt;
-    //
-    // size_t sig_len = 0;
-    // if (OQS_SIG_sign(dsa, sig.data(), &sig_len,
-    //                 message.data(), message.size(),
-    //                 secret_key.data()) != OQS_SUCCESS) {
-    //     OQS_SIG_free(dsa);
-    //     return std::nullopt;
-    // }
-    // OQS_SIG_free(dsa);
+        mldsa65_signature signature;
+        size_t sig_len = signature.size();
 
-    // Placeholder: HMAC-based "signature" (NOT SECURE - FOR TESTING ONLY)
-    crypto_generichash_blake2b(sig.data(), 64,
+        if (OQS_SIG_sign(sig.get(),
+                        signature.data(), &sig_len,
+                        message.data(), message.size(),
+                        secret_key.data()) != OQS_SUCCESS) {
+            return std::nullopt;
+        }
+
+        // ML-DSA-65 signatures are 3309 bytes in liboqs 0.15.0
+        if (sig_len != MLDSA65_SIGNATURE_SIZE) {
+            return std::nullopt;
+        }
+
+        return signature;
+    } catch (...) {
+        return std::nullopt;
+    }
+#else
+    mldsa65_signature signature;
+    crypto_generichash_blake2b(signature.data(), 64,
                                message.data(), message.size(),
                                secret_key.data(), 32);
-    // Fill rest with zeros
-    std::memset(sig.data() + 64, 0, sig.size() - 64);
-
-    return sig;
+    std::memset(signature.data() + 64, 0, signature.size() - 64);
+    return signature;
+#endif
 }
 
 bool mldsa65_verify(
@@ -242,18 +294,20 @@ bool mldsa65_verify(
         return false;
     }
 
-    // TODO: Replace with actual liboqs call
-    // OQS_SIG *dsa = OQS_SIG_new(OQS_SIG_alg_ml_dsa_65);
-    // if (!dsa) return false;
-    //
-    // bool valid = OQS_SIG_verify(dsa, message.data(), message.size(),
-    //                            signature.data(), signature.size(),
-    //                            public_key.data()) == OQS_SUCCESS;
-    // OQS_SIG_free(dsa);
-    // return valid;
+#ifdef LIBSESSION_ENABLE_PQ
+    try {
+        SIGContext sig(OQS_SIG_alg_ml_dsa_65);
 
-    // Placeholder: always return true (NOT SECURE - FOR TESTING ONLY)
-    return true;
+        return OQS_SIG_verify(sig.get(),
+                             message.data(), message.size(),
+                             signature.data(), signature.size(),
+                             public_key.data()) == OQS_SUCCESS;
+    } catch (...) {
+        return false;
+    }
+#else
+    return true;  // Placeholder always verifies
+#endif
 }
 
 // =============================================================================
@@ -296,6 +350,7 @@ std::optional<std::vector<uint8_t>> pars_encrypt(
             nullptr,     // nsec unused
             nonce.data(),
             sym_key.data()) != 0) {
+        secure_zero(sym_key);
         return std::nullopt;
     }
     ciphertext.resize(ciphertext_len);
@@ -308,7 +363,10 @@ std::optional<std::vector<uint8_t>> pars_encrypt(
     to_sign.insert(to_sign.end(), ciphertext.begin(), ciphertext.end());
 
     auto sig = mldsa65_sign(to_sign, sender_dsa_sk);
-    if (!sig) return std::nullopt;
+    if (!sig) {
+        secure_zero(sym_key);
+        return std::nullopt;
+    }
 
     // 5. Assemble output: kem_ct || nonce || ciphertext || signature || sender_dsa_pk
     std::vector<uint8_t> output;
@@ -321,7 +379,8 @@ std::optional<std::vector<uint8_t>> pars_encrypt(
     output.insert(output.end(), sender_dsa_pk.begin(), sender_dsa_pk.end());
 
     // Zero sensitive data
-    sodium_memzero(sym_key.data(), sym_key.size());
+    secure_zero(sym_key);
+    secure_zero(encaps->secret);
 
     return output;
 }
@@ -376,15 +435,17 @@ std::optional<std::vector<uint8_t>> pars_decrypt(
     auto shared = mlkem768_decapsulate(kem_ct, recipient_kem_sk);
     if (!shared) return std::nullopt;
 
-    // 3. Derive symmetric key
+    // 3. Derive symmetric key (need recipient's KEM public key)
+    // Extract public key from secret key (first 1184 bytes of ML-KEM-768 sk contain pk)
+    auto recipient_kem_pk = recipient_kem_sk.subspan(MLKEM768_SECRET_KEY_SIZE - MLKEM768_PUBLIC_KEY_SIZE - 64,
+                                                     MLKEM768_PUBLIC_KEY_SIZE);
+
     std::array<uint8_t, 32> sym_key;
     crypto_generichash_blake2b_state state;
     crypto_generichash_blake2b_init(&state, nullptr, 0, sym_key.size());
     crypto_generichash_blake2b_update(&state, shared->data(), shared->size());
     crypto_generichash_blake2b_update(&state, sender_dsa_pk.data(), sender_dsa_pk.size());
-    // Note: We need recipient's KEM public key here, derive from secret key
-    // For now, use a placeholder approach
-    crypto_generichash_blake2b_update(&state, recipient_kem_sk.data(), 32); // First 32 bytes as placeholder
+    crypto_generichash_blake2b_update(&state, recipient_kem_pk.data(), recipient_kem_pk.size());
     crypto_generichash_blake2b_final(&state, sym_key.data(), sym_key.size());
 
     // 4. Decrypt with XChaCha20-Poly1305
@@ -398,13 +459,15 @@ std::optional<std::vector<uint8_t>> pars_decrypt(
             nullptr, 0,  // no additional data
             nonce.data(),
             sym_key.data()) != 0) {
-        sodium_memzero(sym_key.data(), sym_key.size());
+        secure_zero(sym_key);
+        secure_zero(*shared);
         return std::nullopt;
     }
     plaintext.resize(plaintext_len);
 
     // Zero sensitive data
-    sodium_memzero(sym_key.data(), sym_key.size());
+    secure_zero(sym_key);
+    secure_zero(*shared);
 
     return plaintext;
 }

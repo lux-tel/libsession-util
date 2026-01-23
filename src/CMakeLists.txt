@@ -106,6 +106,27 @@ target_link_libraries(config
     libsodium::sodium-internal
 )
 
+# Post-Quantum Crypto Module (Pars Network)
+if(ENABLE_PQ_CRYPTO)
+    add_libsession_util_library(pqcrypto
+        pq/pq_crypto.cpp
+    )
+
+    target_link_libraries(pqcrypto
+        PUBLIC
+        util
+        PRIVATE
+        libsodium::sodium-internal
+        liboqs::oqs
+    )
+
+    target_compile_definitions(pqcrypto PRIVATE LIBSESSION_ENABLE_PQ=1)
+
+    # Also add PQ support to the crypto library
+    target_link_libraries(crypto PRIVATE liboqs::oqs)
+    target_compile_definitions(crypto PRIVATE LIBSESSION_ENABLE_PQ=1)
+endif()
+
 if(ENABLE_ONIONREQ)
     add_libsession_util_library(onionreq
         onionreq/builder.cpp

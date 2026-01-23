@@ -32,12 +32,12 @@ constexpr size_t MLKEM1024_SHARED_SECRET_SIZE = 32;
 // ML-DSA-65 (NIST Level 3 - recommended for Pars)
 constexpr size_t MLDSA65_PUBLIC_KEY_SIZE = 1952;
 constexpr size_t MLDSA65_SECRET_KEY_SIZE = 4032;
-constexpr size_t MLDSA65_SIGNATURE_SIZE = 3293;
+constexpr size_t MLDSA65_SIGNATURE_SIZE = 3309;  // liboqs 0.15.0
 
 // ML-DSA-87 (NIST Level 5 - maximum security)
 constexpr size_t MLDSA87_PUBLIC_KEY_SIZE = 2592;
 constexpr size_t MLDSA87_SECRET_KEY_SIZE = 4896;
-constexpr size_t MLDSA87_SIGNATURE_SIZE = 4595;
+constexpr size_t MLDSA87_SIGNATURE_SIZE = 4627;  // liboqs 0.15.0
 
 // Pars Session ID prefix (distinguishes from legacy "05" X25519 IDs)
 constexpr std::string_view PARS_SESSION_ID_PREFIX = "07";

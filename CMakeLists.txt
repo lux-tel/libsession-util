@@ -119,6 +119,19 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(external)
 
+# Post-Quantum Cryptography (Pars Network)
+option(ENABLE_PQ_CRYPTO "Build with post-quantum cryptography support (ML-KEM, ML-DSA)" ON)
+
+if(ENABLE_PQ_CRYPTO)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBOQS REQUIRED IMPORTED_TARGET liboqs)
+    find_package(OpenSSL REQUIRED)
+    add_library(liboqs INTERFACE)
+    target_link_libraries(liboqs INTERFACE PkgConfig::LIBOQS OpenSSL::Crypto)
+    add_library(liboqs::oqs ALIAS liboqs)
+    message(STATUS "Post-quantum crypto enabled (liboqs ${LIBOQS_VERSION})")
+endif()
+
 if(ENABLE_ONIONREQ)
     if(NOT TARGET nettle::nettle)
         if(BUILD_STATIC_DEPS)
