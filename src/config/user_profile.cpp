@@ -1,6 +1,7 @@
 #include "session/config/user_profile.h"
 
 #include <sodium/crypto_generichash_blake2b.h>
+#include <sodium/crypto_sign_ed25519.h>
 
 #include "internal.hpp"
 #include "session/config/contacts.hpp"
@@ -18,33 +19,6 @@ UserProfile::UserProfile(
         std::optional<std::span<const unsigned char>> dumped) {
     init(dumped, std::nullopt, std::nullopt);
     load_key(ed25519_secretkey);
-}
-
-void UserProfile::extra_data(oxenc::bt_dict_producer&& extra) const {
-    if (pro_config) {
-        auto root = extra.append_dict("pro_config");
-
-        const ProProof& pro_proof = pro_config->proof;
-        {
-            auto proof_dict = root.append_dict("p");
-            proof_dict.append("@", pro_proof.version);
-            proof_dict.append("e", pro_proof.expiry_unix_ts.time_since_epoch().count());
-            proof_dict.append("g", pro_proof.gen_index_hash);
-            proof_dict.append("r", pro_proof.rotating_pubkey);
-            proof_dict.append("s", pro_proof.sig);
-        }
-
-        root.append("r", pro_config->rotating_privkey);
-    }
-}
-
-void UserProfile::load_extra_data(oxenc::bt_dict_consumer&& extra) {
-    if (extra.skip_until("pro_config")) {
-        auto pd = extra.consume_dict_consumer();
-        ProConfig pro = {};
-        if (pro.load(pd))
-            pro_config = std::move(pro);
-    }
 }
 
 std::optional<std::string_view> UserProfile::get_name() const {
@@ -177,13 +151,28 @@ std::chrono::sys_seconds UserProfile::get_profile_updated() const {
 }
 
 std::optional<ProConfig> UserProfile::get_pro_config() const {
-    return pro_config;
+    std::optional<ProConfig> result = {};
+    if (const config::dict* s = data["s"].dict()) {
+        ProConfig pro = {};
+        if (pro.load(*s))
+            result = std::move(pro);
+    }
+    return result;
 }
 
-void UserProfile::set_pro_config(ProConfig const& pro) {
-    if (pro_config != pro) {
-        pro_config = pro;
-        _needs_dump = true;
+void UserProfile::set_pro_config(const ProConfig& pro) {
+    std::optional<ProConfig> curr = get_pro_config();
+    if (!curr || *curr != pro) {
+        auto root = data["s"];
+        root["r"] = std::span<const unsigned char>(
+                pro.rotating_privkey.data(), crypto_sign_ed25519_SEEDBYTES);
+
+        auto proof_dict = root["p"];
+        proof_dict["@"] = pro.proof.version;
+        proof_dict["g"] = pro.proof.revocation_tag;
+        proof_dict["e"] = epoch_seconds(pro.proof.expiry_at);
+        proof_dict["s"] = pro.proof.sig;
+
         const auto target_timestamp =
                 (data["t"].integer_or(0) >= data["T"].integer_or(0) ? "t" : "T");
         data[target_timestamp] = ts_now();
@@ -191,13 +180,9 @@ void UserProfile::set_pro_config(ProConfig const& pro) {
 }
 
 bool UserProfile::remove_pro_config() {
-    if (pro_config) {
-        pro_config = std::nullopt;
-        _needs_dump = true;
-        return true;
-    }
-
-    return false;
+    bool result = data["s"].exists();
+    data["s"].erase();
+    return result;
 }
 
 session::ProProfileBitset UserProfile::get_profile_bitset() const {
@@ -227,17 +212,15 @@ void UserProfile::set_animated_avatar(bool enabled) {
     }
 }
 
-std::optional<std::chrono::sys_time<std::chrono::milliseconds>> UserProfile::get_pro_access_expiry()
-        const {
+std::optional<std::chrono::sys_seconds> UserProfile::get_pro_access_expiry() const {
     if (auto* E = data["E"].integer(); E)
-        return std::chrono::sys_time<std::chrono::milliseconds>{std::chrono::milliseconds{*E}};
+        return std::chrono::sys_seconds{std::chrono::seconds{*E}};
     return std::nullopt;
 }
 
-void UserProfile::set_pro_access_expiry(
-        std::optional<std::chrono::sys_time<std::chrono::milliseconds>> access_expiry_ts_ms) {
-    if (access_expiry_ts_ms)
-        data["E"] = static_cast<uint64_t>(access_expiry_ts_ms->time_since_epoch().count());
+void UserProfile::set_pro_access_expiry(std::optional<std::chrono::sys_seconds> access_expiry_ts) {
+    if (access_expiry_ts)
+        data["E"] = epoch_seconds(*access_expiry_ts);
     else
         data["E"].erase();
 }
@@ -345,24 +328,24 @@ LIBSESSION_C_API void user_profile_set_blinded_msgreqs(config_object* conf, int 
 }
 
 LIBSESSION_C_API int64_t user_profile_get_profile_updated(config_object* conf) {
-    return unbox<UserProfile>(conf)->get_profile_updated().time_since_epoch().count();
+    return epoch_seconds(unbox<UserProfile>(conf)->get_profile_updated());
 }
 
 LIBSESSION_C_API bool user_profile_get_pro_config(const config_object* conf, pro_pro_config* pro) {
     if (auto val = unbox<UserProfile>(conf)->get_pro_config(); val) {
-        static_assert(sizeof pro->proof.gen_index_hash == sizeof(val->proof.gen_index_hash));
+        static_assert(sizeof pro->proof.revocation_tag == sizeof(val->proof.revocation_tag));
         static_assert(sizeof pro->proof.rotating_pubkey == sizeof(val->proof.rotating_pubkey));
         static_assert(sizeof pro->proof.sig == sizeof(val->proof.sig));
         pro->proof.version = val->proof.version;
         std::memcpy(
-                pro->proof.gen_index_hash.data,
-                val->proof.gen_index_hash.data(),
-                val->proof.gen_index_hash.size());
+                pro->proof.revocation_tag.data,
+                val->proof.revocation_tag.data(),
+                val->proof.revocation_tag.size());
         std::memcpy(
                 pro->proof.rotating_pubkey.data,
                 val->proof.rotating_pubkey.data(),
                 val->proof.rotating_pubkey.size());
-        pro->proof.expiry_unix_ts_ms = val->proof.expiry_unix_ts.time_since_epoch().count();
+        pro->proof.expiry_ts = epoch_seconds(val->proof.expiry_at);
         std::memcpy(pro->proof.sig.data, val->proof.sig.data(), val->proof.sig.size());
         std::memcpy(
                 pro->rotating_privkey.data,
@@ -377,15 +360,14 @@ LIBSESSION_C_API void user_profile_set_pro_config(config_object* conf, const pro
     ProConfig val = {};
     val.proof.version = pro->proof.version;
     std::memcpy(
-            val.proof.gen_index_hash.data(),
-            pro->proof.gen_index_hash.data,
-            val.proof.gen_index_hash.size());
+            val.proof.revocation_tag.data(),
+            pro->proof.revocation_tag.data,
+            val.proof.revocation_tag.size());
     std::memcpy(
             val.proof.rotating_pubkey.data(),
             pro->proof.rotating_pubkey.data,
             val.proof.rotating_pubkey.size());
-    val.proof.expiry_unix_ts = std::chrono::sys_time<std::chrono::milliseconds>(
-            std::chrono::milliseconds(pro->proof.expiry_unix_ts_ms));
+    val.proof.expiry_at = as_sys_seconds(pro->proof.expiry_ts);
     std::memcpy(val.proof.sig.data(), pro->proof.sig.data, val.proof.sig.size());
     std::memcpy(
             val.rotating_privkey.data(), pro->rotating_privkey.data, val.rotating_privkey.size());
@@ -411,20 +393,18 @@ LIBSESSION_C_API void user_profile_set_animated_avatar(config_object* conf, bool
     unbox<UserProfile>(conf)->set_animated_avatar(enabled);
 }
 
-LIBSESSION_C_API uint64_t user_profile_get_pro_access_expiry_ms(const config_object* conf) {
-    if (auto expiry = unbox<UserProfile>(conf)->get_pro_access_expiry(); expiry)
-        return expiry->time_since_epoch().count();
+LIBSESSION_C_API int64_t user_profile_get_pro_access_expiry(const config_object* conf) {
+    if (auto expiry = unbox<UserProfile>(conf)->get_pro_access_expiry())
+        return epoch_seconds(*expiry);
     return 0;
 }
 
-LIBSESSION_C_API void user_profile_set_pro_access_expiry_ms(
-        config_object* conf, uint64_t access_expiry_ts_ms) {
-    if (access_expiry_ts_ms <= 0)
+LIBSESSION_C_API void user_profile_set_pro_access_expiry(
+        config_object* conf, int64_t access_expiry_ts) {
+    if (access_expiry_ts <= 0)
         unbox<UserProfile>(conf)->set_pro_access_expiry(std::nullopt);
     else
-        unbox<UserProfile>(conf)->set_pro_access_expiry(
-                std::chrono::sys_time<std::chrono::milliseconds>{
-                        std::chrono::milliseconds{access_expiry_ts_ms}});
+        unbox<UserProfile>(conf)->set_pro_access_expiry(as_sys_seconds(access_expiry_ts));
 }
 
 }  // extern "C"

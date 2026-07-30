@@ -32,7 +32,7 @@ class val_loader;
 /// 1 - dict of one-to-one conversations.  Each key is the Session ID of the contact (in hex).
 ///     Values are dicts with keys:
 ///     e - contacts pro expiry unix timestamp (in milliseconds)
-///     g - contacts pro gen_index_hash
+///     g - contacts pro revocation_tag
 ///     r - the unix timestamp (in integer milliseconds) of the last-read message.  Always
 ///         included, but will be 0 if no messages are read.
 ///     u - will be present and set to 1 if this conversation is specifically marked unread.
@@ -62,7 +62,7 @@ class val_loader;
 /// b - outgoing blinded message request conversations.  The key is the blinded Session ID without
 ///     the prefix.  Values are dicts with keys:
 ///     e - contacts pro expiry unix timestamp (in milliseconds)
-///     g - contacts pro gen_index_hash
+///     g - contacts pro revocation_tag
 ///     r - the unix timestamp (integer milliseconds) of the last-read message.  Always included,
 ///         but will be 0 if no messages are read.
 ///     u - will be present and set to 1 if this conversation is specifically marked unread.
@@ -74,21 +74,35 @@ namespace convo {
         int64_t last_read = 0;
         bool unread = false;
 
+        virtual ~base() = default;
+
       protected:
-        void load(const dict& info_dict);
+        virtual void load(const dict& info_dict);
+        friend class session::config::val_loader;
+        friend class session::config::ConvoInfoVolatile;
+
+        base() = default;
+        base(int64_t last_read, bool unread) : last_read(last_read), unread(unread) {}
+    };
+
+    struct pro_base : base {
+        /// Opaque revocation tag identifying this proof (from the Session Pro backend)
+        std::optional<array_uc32> pro_revocation_tag;
+
+        /// Unix epoch timestamp (seconds) until which this proof's entitlement to Session Pro
+        /// features is valid
+        sys_seconds pro_expiry_at{};
+
+      protected:
+        using base::base;
+
+        void load(const dict& info_dict) override;
         friend class session::config::val_loader;
         friend class session::config::ConvoInfoVolatile;
     };
 
-    struct one_to_one : base {
+    struct one_to_one : pro_base {
         std::string session_id;  // in hex
-
-        /// Hash of the generation index set by the Session Pro Backend
-        std::optional<array_uc32> pro_gen_index_hash;
-
-        /// Unix epoch timestamp to which this proof's entitlement to Session Pro features is valid
-        /// to
-        std::chrono::sys_time<std::chrono::milliseconds> pro_expiry_unix_ts{};
 
         /// API: convo_info_volatile/one_to_one::one_to_one
         ///
@@ -168,16 +182,9 @@ namespace convo {
         void into(convo_info_volatile_legacy_group& c) const;            // Into c struct
     };
 
-    struct blinded_one_to_one : base {
+    struct blinded_one_to_one : pro_base {
         std::string blinded_session_id;  // in hex
         bool legacy_blinding;
-
-        /// Hash of the generation index set by the Session Pro Backend
-        std::optional<array_uc32> pro_gen_index_hash;
-
-        /// Unix epoch timestamp to which this proof's entitlement to Session Pro features is valid
-        /// to
-        std::chrono::sys_time<std::chrono::milliseconds> pro_expiry_unix_ts{};
 
         /// API: convo_info_volatile/blinded_one_to_one::blinded_one_to_one
         ///
