@@ -17,7 +17,7 @@ if(CCACHE_PROGRAM)
 endif()
 
 project(libsession-util
-    VERSION 1.5.9
+    VERSION 1.7.0
     DESCRIPTION "Session client utility library"
     LANGUAGES ${LANGS})
 
@@ -59,7 +59,11 @@ else()
 endif()
 
 option(BUILD_STATIC_DEPS "Build all dependencies statically rather than trying to link to them on the system" ${static_default})
-option(STATIC_BUNDLE "Build a single static .a containing everything (both code and dependencies)" ${static_default})
+option(STATIC_BUNDLE "Build a single static .a containing everything (both code and dependencies)" ${BUILD_STATIC_DEPS})
+
+if(STATIC_BUNDLE AND NOT BUILD_STATIC_DEPS)
+    message(FATAL_ERROR "STATIC_BUNDLE requires BUILD_STATIC_DEPS=ON (cannot build a static bundle when using shared/system libs)")
+endif()
 
 if(BUILD_SHARED_LIBS OR libsession_IS_TOPLEVEL_PROJECT)
     set(install_default ON)
@@ -82,7 +86,8 @@ option(STATIC_LIBSTD "Statically link libstdc++/libgcc" ${default_static_libstd}
 option(USE_LTO "Use Link-Time Optimization" ${use_lto_default})
 
 # Provide this as an option for now because GMP and Desktop are sometimes unhappy with each other.
-option(ENABLE_ONIONREQ "Build with onion request functionality" ON)
+option(ENABLE_NETWORKING "Build with networking functionality" ON)
+option(ENABLE_NETWORKING_SROUTER "Build with session-router networking support (requires ENABLE_NETWORKING)" ON)
 
 if(USE_LTO)
   include(CheckIPOSupported)
@@ -119,7 +124,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(external)
 
-if(ENABLE_ONIONREQ)
+if(ENABLE_NETWORKING)
     if(NOT TARGET nettle::nettle)
         if(BUILD_STATIC_DEPS)
             message(FATAL_ERROR "Internal error: nettle::nettle target (expected via libquic BUILD_STATIC_DEPS) not found")
